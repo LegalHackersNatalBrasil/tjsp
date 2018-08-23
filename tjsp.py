@@ -3,6 +3,7 @@
 import gevent.monkey
 
 gevent.monkey.patch_all()
+from bs4 import Tag, BeautifulSoup
 
 from jus import jus_gen
 import sys
@@ -35,16 +36,38 @@ def clean_content(content):
     return re.sub(r'[\t\r\n]', '', "".join(content)).strip()
 
 
+def clean_content_other(content):
+    return re.sub(r';+', ';', re.sub(r'\t+|\r+|\n+', ';', "".join(content).strip()))
+
+
 def get_movimentations(content_html):
     movs = []
-    movimentacoes = html.fromstring(content_html).xpath(
+    parsed_html = html.fromstring(content_html)
+    soup = BeautifulSoup(content_html, features='lxml')
+    table = soup.find('table', class_='secaoFormBody', id='')
+    trs = [x for x in table.children if isinstance(x, Tag)]
+    prev = ''
+    for row in trs:
+        # primeira coluna da nossa tabela data
+        cols = row.find_all('td')
+        data = prev = clean_content(cols[0].text) or prev
+        # terceira coluna da nossa tabela conteudo da movimentacao
+        movimentacao = clean_content(cols[1].text)
+        movs.append(u"{}|{}\n".format(data, movimentacao))
+        # return u"{}|{}\n".format(data, movimentacao) # cvs
+
+    movimentacoes = parsed_html.xpath(
         '//*[@id="tabelaTodasMovimentacoes"]/tr')
     for row in movimentacoes:
         # primeira coluna da nossa tabela data
         data = clean_content(row.xpath('./td[1]/text()'))
         # terceira coluna da nossa tabela conteudo da movimentacao
         movimentacao = clean_content(row.xpath('./td[3]/text()'))
-        movs.append(u"{}|{}\n".format(data, movimentacao))
+        extra = "".join(row.xpath('./td[3]/span/text()')).strip()
+        text = u"{}|{}".format(data, movimentacao)
+        if extra:
+            text += f'|{clean_content_other(extra)}'
+        movs.append(text+'\n')
         # return u"{}|{}\n".format(data, movimentacao) # cvs
     return movs
 
@@ -129,10 +152,10 @@ def main():
                 movimentacoes = get_movimentations(conteudo)
                 if movimentacoes:
                     _, last_mov = movimentacoes[0].split('|')
-                    if compare_hash(processo, last_mov):
-                        print("Gerando Hash: %s" % processo)
-                        for mov in movimentacoes:
-                            save_content(processo, mov)
+                    # if compare_hash(processo, last_mov):
+                    print("Gerando Hash: %s" % processo)
+                    for mov in movimentacoes:
+                        save_content(processo, mov)
 
     else:
         print(u"Não existe processos")
@@ -150,7 +173,6 @@ def update_process(process, sleep=1.2):
                 print("Gerando Hash: %s" % processo)
                 for mov in movimentacoes:
                     save_content(processo, mov)
-                # notification(msg=processo)
     time.sleep(sleep)
 
 
@@ -164,6 +186,7 @@ def asynchronous(chunk=2):
     for dataprocesses in chunks(processos, chunk):
         threads = []
         for processo in dataprocesses:
+            pass
             threads.append(gevent.spawn(update_process, processo))
         gevent.joinall(threads)
 
@@ -171,7 +194,7 @@ def asynchronous(chunk=2):
 if __name__ == '__main__':
     time.sleep(2)
     try:
-        print("\n*** Checando a cada 5min ***\n\n")
+        print("\n*** Checando a cada 5333min ***\n\n")
         while True:
             asynchronous()
             time.sleep(300)
