@@ -5,7 +5,7 @@ import gevent.monkey
 gevent.monkey.patch_all()
 from bs4 import Tag, BeautifulSoup
 
-from jus import jus_gen
+import jus
 import sys
 import time
 import gevent
@@ -19,6 +19,14 @@ from lxml import html
 from urllib.request import urlopen
 from urllib.error import HTTPError, URLError
 
+from pymongo import MongoClient
+from datetime import datetime
+
+cliente = MongoClient()
+banco = cliente['LegalHackers']
+colecao = banco['tjsp']
+
+
 
 processos = []
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -28,8 +36,8 @@ db = 'db'  # nome do diretorio
 hashfilename = 'processos_hash.txt'
 
 
-def get_processes(filename='processos_tjsp_1.txt'):
-    return jus_gen(j=8, tr=26, o=53, n_max=5, ano=2015)
+def get_processes(n_min=0, n_max=10000):
+    return jus.process_generator(j=8, tr=26, o=53,n_min=nmin, n_max=n_max, ano=2015)
 
 
 def clean_content(content):
@@ -90,78 +98,31 @@ def consulta_processo(numero, timeout=10):
         return resp.read()
 
 
-if not os.path.exists(db):
-    os.makedirs(db)
+def save_hashfile(numero, hash_):
+    colecao.update_one(
+        {'processo': numero},
+        {
+            '$set': {
+                'hash': hash_, 
+                'dt_modificacao': datetime.now()
+            }
+        },
+        upsert=True
+    )
+    return True
+
+def compare_hash(numero, hash_):
+    hashcontent = hashlib.md5(hash_.encode('utf-8'))
+    hashcontent = hashcontent.hexdigest()
+    busca = colecao.find_one(
+        {'processo': numero, 'hash': hashcontent}
+    )
+    if not busca:
+        return save_hashfile(numero, hashcontent)
+    return False
 
 
-def save_content(numero, content):
-    with io.open(os.path.join(db, numero), 'a', encoding='utf8') as f:
-        f.write(content)
-
-
-def save_hashfile(numero, hash, position, append=False):
-    if position == 0:
-        with io.open(hashfilename, 'w', encoding='utf8') as f:
-            f.write(u"{}|{}\n".format(numero, hash))
-            return True
-
-    with io.open(hashfilename, 'r', encoding='utf8') as f:
-        contents = f.readlines()
-
-        if not append:
-            contents[position] = u"{}|{}\n".format(numero, hash)
-        else:
-            contents.append(u"{}|{}\n".format(numero, hash))
-
-    with io.open(hashfilename, 'w', encoding='utf8') as f:
-        f.write(u"".join(contents))
-        return True
-
-
-def compare_hash(numero, content):
-    hashcontent = hashlib.md5(content.encode('utf-8'))
-    status = False
-    last = -1
-    if not os.path.exists(hashfilename):
-        return save_hashfile(numero, hashcontent.hexdigest(), 0)
-
-    with io.open(hashfilename, 'r', encoding='utf8') as f:
-        contents = f.readlines()
-
-    for index, row in enumerate(contents):
-        num, hashmov = row.split('|')
-        last = index
-        if num == numero:
-            if hashcontent.hexdigest() == str(hashmov.strip()):
-                return False
-            else:
-                print(u"Nova movimentação para o processo: %s posicao: %d" % (numero, index))
-                return save_hashfile(numero, hashcontent.hexdigest(), index)
-
-    if status == False:
-        return save_hashfile(numero, hashcontent.hexdigest(), -1, True)
-
-
-def main():
-    if processos:
-        for processo in processos:
-            processo = processo.strip()
-            print(u"Coletando Movimentações: %s" % processo)
-            conteudo = consulta_processo(processo)
-            if conteudo:
-                movimentacoes = get_movimentations(conteudo)
-                if movimentacoes:
-                    _, last_mov = movimentacoes[0].split('|')
-                    # if compare_hash(processo, last_mov):
-                    print("Gerando Hash: %s" % processo)
-                    for mov in movimentacoes:
-                        save_content(processo, mov)
-
-    else:
-        print(u"Não existe processos")
-
-
-def update_process(process, sleep=1.2):
+def update_process(process, sleep_=1.2):
     processo = process.strip()
     print("Coletando Movimentações: %s" % processo)
     conteudo = consulta_processo(processo)
@@ -171,9 +132,12 @@ def update_process(process, sleep=1.2):
             _, last_mov = movimentacoes[0].split('|')
             if compare_hash(processo, last_mov):
                 print("Gerando Hash: %s" % processo)
-                for mov in movimentacoes:
-                    save_content(processo, mov)
-    time.sleep(sleep)
+                colecao.update_one(
+                    {'processo': processo},
+                    {"$addToSet": {'movimentacoes': {"$each": movimentacoes}}},
+                    upsert=True
+                )
+    time.sleep(sleep_)
 
 
 def chunks(l, n):
@@ -181,12 +145,11 @@ def chunks(l, n):
         yield l[i:i + n]
 
 
-def asynchronous(chunk=2):
+def asynchronous(chunk=10):
     processos = get_processes()
     for dataprocesses in chunks(processos, chunk):
         threads = []
         for processo in dataprocesses:
-            pass
             threads.append(gevent.spawn(update_process, processo))
         gevent.joinall(threads)
 
