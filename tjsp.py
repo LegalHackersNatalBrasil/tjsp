@@ -37,7 +37,7 @@ hashfilename = 'processos_hash.txt'
 
 
 def get_processes(n_min=0, n_max=10000):
-    return jus.process_generator(j=8, tr=26, o=53,n_min=nmin, n_max=n_max, ano=2015)
+    return jus.process_generator(j=8, tr=26, o=53,n_min=n_min, n_max=n_max, ano=2014)
 
 
 def clean_content(content):
